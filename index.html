@@ -248,9 +248,14 @@ async function pvFind(r){
   if(PV.cache.has(r.id))return PV.cache.get(r.id);
   const ti=pvClean(r),ar=(r.a||'').split(',')[0].trim();
   const u='https://itunes.apple.com/search?media=music&entity=song&limit=10&term='+encodeURIComponent((ti+' '+ar).trim());
-  let j;try{j=await pvJsonp(u)}catch(e1){const res=await fetch(u);j=await res.json()}const norm=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+  let cands=null;
+  try{let j;try{j=await pvJsonp(u)}catch(e1){const res=await fetch(u);j=await res.json()}cands=j.results||[]}catch(e2){}
+  if(cands===null){
+    const dj=await pvJsonp('https://api.deezer.com/search?limit=10&output=jsonp&q='+encodeURIComponent((ti+' '+ar).trim()));
+    cands=(dj.data||[]).map(x=>({trackName:x.title,artistName:x.artist&&x.artist.name,collectionName:x.album&&x.album.title,previewUrl:x.preview}));
+  }const norm=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
   let best=null,score=-9;
-  for(const x of j.results||[]){if(!x.previewUrl)continue;let s=0;const tn=norm(x.trackName),an=norm(x.artistName),nt=norm(ti);
+  for(const x of cands){if(!x.previewUrl)continue;let s=0;const tn=norm(x.trackName),an=norm(x.artistName),nt=norm(ti);
     if(tn===nt)s+=3;else if(tn.startsWith(nt)||nt.startsWith(tn))s+=2;else if(tn.includes(nt))s+=1;
     if(ar&&an.includes(norm(ar).split(' ')[0]))s+=3;
     if(/karaoke|tribute|made famous|originally performed|lullaby|instrumental/i.test(x.trackName+' '+x.collectionName+' '+x.artistName))s-=3;
@@ -268,7 +273,7 @@ function pvButton(r){
     const cached=PV.cache.get(r.id);
     if(cached&&cached.url){PV.audio.src=cached.url}else{PV.audio.src=SILENT;PV.audio.play().catch(()=>{});btn.textContent='…';}
     let f;
-    try{f=cached||await pvFind(r)}catch(e){if(PV.cur===me){note.textContent='Could not reach the preview service';pvReset()}return}
+    try{f=cached||await pvFind(r)}catch(e){if(PV.cur===me){note.textContent='Could not reach preview service';note.title='Try opening this page in Safari, on Wi-Fi, with content blockers and Private Relay off.';pvReset()}return}
     if(PV.cur!==me)return;
     if(!f){note.textContent='No preview found';pvReset();return}
     note.textContent=f.label;PV.audio.src=f.url;btn.textContent='■ Stop';
