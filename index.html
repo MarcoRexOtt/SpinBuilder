@@ -241,11 +241,14 @@ const PV={cache:new Map(),audio:new Audio(),cur:null};
 PV.audio.preload='none';
 PV.audio.addEventListener('ended',()=>{if(PV.cur&&PV.audio.src!==SILENT)pvReset()});
 function pvClean(r){return r.t.replace(/\s+[-–]\s+(Remaster|Radio|Single|Version|Edit|Mix|From|Original|Live|Acoustic|Re-?Recorded|\d{4}).*$/i,'').replace(/\s*\((feat\.?|with|From)[^)]*\)/i,'').trim()}
+function pvJsonp(url){return new Promise((res,rej)=>{const cb='pvcb'+Date.now()+Math.floor(Math.random()*1e6);const s=document.createElement('script');
+  const clean=()=>{clearTimeout(to);delete window[cb];s.remove()};const to=setTimeout(()=>{clean();rej(new Error('timeout'))},9000);
+  window[cb]=d=>{clean();res(d)};s.onerror=()=>{clean();rej(new Error('network'))};s.src=url+'&callback='+cb;document.head.append(s)})}
 async function pvFind(r){
   if(PV.cache.has(r.id))return PV.cache.get(r.id);
   const ti=pvClean(r),ar=(r.a||'').split(',')[0].trim();
-  const res=await fetch('https://itunes.apple.com/search?media=music&entity=song&limit=10&term='+encodeURIComponent((ti+' '+ar).trim()));
-  const j=await res.json();const norm=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+  const u='https://itunes.apple.com/search?media=music&entity=song&limit=10&term='+encodeURIComponent((ti+' '+ar).trim());
+  let j;try{j=await pvJsonp(u)}catch(e1){const res=await fetch(u);j=await res.json()}const norm=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
   let best=null,score=-9;
   for(const x of j.results||[]){if(!x.previewUrl)continue;let s=0;const tn=norm(x.trackName),an=norm(x.artistName),nt=norm(ti);
     if(tn===nt)s+=3;else if(tn.startsWith(nt)||nt.startsWith(tn))s+=2;else if(tn.includes(nt))s+=1;
@@ -264,13 +267,12 @@ function pvButton(r){
     const me={btn};PV.cur=me;btn.setAttribute('aria-pressed','true');
     const cached=PV.cache.get(r.id);
     if(cached&&cached.url){PV.audio.src=cached.url}else{PV.audio.src=SILENT;PV.audio.play().catch(()=>{});btn.textContent='…';}
-    try{
-      const f=cached||await pvFind(r);
-      if(PV.cur!==me)return;
-      if(!f){note.textContent='No preview found';pvReset();return}
-      note.textContent=f.label;PV.audio.src=f.url;btn.textContent='■ Stop';
-      await PV.audio.play();
-    }catch(e){if(PV.cur===me){note.textContent=e&&e.name==='NotAllowedError'?'Tap again to play':'Preview unavailable (offline?)';pvReset()}}
+    let f;
+    try{f=cached||await pvFind(r)}catch(e){if(PV.cur===me){note.textContent='Could not reach the preview service';pvReset()}return}
+    if(PV.cur!==me)return;
+    if(!f){note.textContent='No preview found';pvReset();return}
+    note.textContent=f.label;PV.audio.src=f.url;btn.textContent='■ Stop';
+    try{await PV.audio.play()}catch(e){if(PV.cur===me){note.textContent=e&&e.name==='NotAllowedError'?'Tap again to play':'Playback failed ('+(e&&e.name||'error')+')';pvReset()}}
   });
   return h('span',{class:'pv'},btn,note)}
 function listen(r){
