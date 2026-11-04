@@ -376,9 +376,9 @@ function renderProfile(){
 /* export */
 function lines(){return P.items.map(id=>byId.get(id)).filter(Boolean)}
 function asText(){let t=0;const out=[(P.name||'Class profile')+' ('+fmt(lines().reduce((a,r)=>a+(r.len||0),0))+')'];lines().forEach((r,i)=>{out.push((i+1)+'. '+fmt(t)+'  '+r.t+(r.a?' – '+r.a:'')+'  |  '+(r.bpm??'?')+' bpm  |  '+(r.rpm||'?')+' rpm  |  '+r.mv+'  |  '+fmt(r.len));t+=r.len||0});return out.join('\n')}
-function asCsv(){const q=v=>'"'+String(v??'').replace(/"/g,'""')+'"';let t=0;const head=['Order','Start','Song Title','Artist','Original Year','Decade','BPM','RPM','Length (counted)','Length on file','Movement','Position','Terrain','Format','Instructions'];
-  const rows=lines().map((r,i)=>{const row=[i+1,fmt(t),r.t,r.a,r.yr,r.dec,r.bpm,r.rpm,fmt(r.len),fmt(r.raw||r.len),r.mv,r.pos,r.ter,r.fmt,r.ins].map(q).join(',');t+=r.len||0;return row});
-  return '﻿'+[head.map(q).join(','),...rows].join('\r\n')}
+function asCsv(){const q=v=>'"'+String(v??'').replace(/"/g,'""')+'"';const head=['Song Title','Artist','BPM','Length (counted)','RPM','Movement','Instructions'];
+  const rows=lines().map(r=>[r.t,r.a,r.bpm,fmt(r.len),r.rpm,r.mv,r.ins].map(q).join(','));
+  return '\ufeff'+[head.map(q).join(','),...rows].join('\r\n')}
 $('copy').addEventListener('click',async()=>{const t=asText();try{await navigator.clipboard.writeText(t);$('status').textContent='Copied to the clipboard.'}catch(e){const ta=h('textarea',{style:'width:100%;height:120px'});ta.value=t;$('status').textContent='Copy blocked here. Select the text below and copy it.';$('status').after(ta);ta.select()}});
 let dlCap=null;
 $('dl').addEventListener('click',async()=>{if(!dlCap)return;if(!lines().length){$('status').textContent='Add songs first.';return}
