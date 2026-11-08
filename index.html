@@ -495,7 +495,85 @@ $('sp').addEventListener('click',async()=>{const st=$('status'),b=$('sp');if(!mc
   b.disabled=false});
 /* standalone: browser download and browser storage */
 dlCap={save:async({filename,data})=>{const b=new Blob([data],{type:'text/csv;charset=utf-8'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),4000)}};
-$('dl').hidden=false;store=lsStore();refreshSaved();inbox=lsInbox();loadInbox();
+$('dl').hidden=false;store=lsStore();refreshSaved();inbox=lsInbox();loadInbox().then(spFinishLogin);
+
+/* Send to Spotify on the standalone page: Spotify login (PKCE, no secret) and the Spotify Web API */
+const SP_ID='f9cec738acad431f8639fbacfaed90c9';
+const SP_REDIRECT=location.origin+location.pathname.replace(/index\.html$/i,'');
+const SP_API='https://api.spotify.com/v1';
+const spLS={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v);return true}catch(e){return false}},del(k){try{localStorage.removeItem(k)}catch(e){}}};
+const b64u=buf=>btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const spRand=n=>{const a=new Uint8Array(n);crypto.getRandomValues(a);return b64u(a)};
+function spTok(){try{return JSON.parse(spLS.get('spin-sp-token')||'null')}catch(e){return null}}
+async function spTokenCall(params){const r=await fetch('https://accounts.spotify.com/api/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(params)});
+  const j=await r.json().catch(()=>({}));if(!r.ok)throw Object.assign(new Error(j.error_description||j.error||'token'),{status:r.status});
+  const old=spTok()||{};spLS.set('spin-sp-token',JSON.stringify({access:j.access_token,refresh:j.refresh_token||old.refresh,exp:Date.now()+(j.expires_in||3600)*1000-60000}));return spTok()}
+async function spConnect(){
+  const ver=spRand(64),state=spRand(16);
+  const ch=b64u(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(ver)));
+  spLS.set('spin-sp-verifier',ver);spLS.set('spin-sp-state',state);
+  spLS.set('spin-sp-resume',JSON.stringify({items:P.items,name:P.name||$('pname').value||'',target:P.target}));
+  location.href='https://accounts.spotify.com/authorize?'+new URLSearchParams({response_type:'code',client_id:SP_ID,scope:'playlist-modify-private',redirect_uri:SP_REDIRECT,state,code_challenge_method:'S256',code_challenge:ch}).toString()}
+async function spFinishLogin(){
+  const q=new URLSearchParams(location.search);if(!q.has('code')&&!q.has('error'))return;
+  const code=q.get('code'),state=q.get('state'),err=q.get('error');
+  history.replaceState(null,'',location.pathname);
+  const st=$('status');
+  if(err){st.textContent='Spotify sign-in was cancelled.';return}
+  if(!code||state!==spLS.get('spin-sp-state')){st.textContent='Spotify sign-in could not be checked. Tap Send to Spotify to try again.';return}
+  try{await spTokenCall({grant_type:'authorization_code',code,redirect_uri:SP_REDIRECT,client_id:SP_ID,code_verifier:spLS.get('spin-sp-verifier')||''});
+    spLS.del('spin-sp-verifier');spLS.del('spin-sp-state');
+    try{const rs=JSON.parse(spLS.get('spin-sp-resume')||'null');if(rs){P.items=(rs.items||[]).map(resolveId).filter(i=>byId.has(i));P.name=rs.name||'';P.target=rs.target||45;$('pname').value=P.name;$('target').value=P.target;renderProfile();renderResults()}}catch(e){}
+    spLS.del('spin-sp-resume');st.textContent='Connected to Spotify. Tap Send to Spotify to create the playlist.'}
+  catch(e){st.textContent='Spotify sign-in failed ('+(e.message||'error')+'). Check the Redirect URI in your Spotify app, then try again.'}}
+async function spFetch(path,opts={},retry=true){
+  let t=spTok();if(!t)throw Object.assign(new Error('auth'),{status:401});
+  if(Date.now()>t.exp){if(!t.refresh)throw Object.assign(new Error('auth'),{status:401});try{t=await spTokenCall({grant_type:'refresh_token',refresh_token:t.refresh,client_id:SP_ID})}catch(e){spLS.del('spin-sp-token');throw Object.assign(new Error('auth'),{status:401})}}
+  const r=await fetch(SP_API+path,{...opts,headers:{Authorization:'Bearer '+t.access,'Content-Type':'application/json',...(opts.headers||{})}});
+  if(r.status===401&&retry){spLS.del('spin-sp-token');throw Object.assign(new Error('auth'),{status:401})}
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok)throw Object.assign(new Error((j.error&&j.error.message)||'error'),{status:r.status,retry:r.headers.get('Retry-After')});
+  return j}
+const spNorm=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+async function spMatch(r){
+  const ti=pvClean(r).replace(/"/g,''),ar=(r.a||'').split(/,|&| feat/i)[0].trim().replace(/"/g,'');
+  const tries=[ar?'track:'+ti+' artist:'+ar:'track:'+ti,(ti+' '+ar).trim()];
+  for(const q of tries){
+    const j=await spFetch('/search?'+new URLSearchParams({q,type:'track',limit:'5'}).toString());
+    let best=null,score=-9;
+    for(const x of (j.tracks&&j.tracks.items)||[]){let s=0;const tn=spNorm(x.name),nt=spNorm(ti),an=spNorm((x.artists||[]).map(a=>a.name).join(' '));
+      if(tn===nt)s+=3;else if(tn.startsWith(nt)||nt.startsWith(tn))s+=2;else if(tn.includes(nt))s+=1;
+      if(ar&&an.includes(spNorm(ar).split(' ')[0]))s+=3;
+      if(/karaoke|tribute|made famous|originally performed|lullaby|instrumental/i.test(x.name+' '+(x.album&&x.album.name)+' '+an))s-=3;
+      if(s>score){score=s;best=x}}
+    if(best&&score>=2)return best}
+  return null}
+let spBusy=false;
+async function spSend(){const st=$('status'),b=$('sp');if(spBusy)return;
+  const L=lines();if(!L.length){st.textContent='Add songs first.';return}
+  if(!spTok()){st.textContent='Opening Spotify to sign in…';await spConnect();return}
+  spBusy=true;b.disabled=true;
+  const old=document.getElementById('splist');if(old)old.remove();
+  const rows=[];
+  try{
+    for(let i=0;i<L.length;i++){st.textContent='Finding songs on Spotify… '+(i+1)+' of '+L.length;rows.push({r:L[i],m:await spMatch(L[i])})}
+    const ok=rows.filter(x=>x.m);if(!ok.length){st.textContent='None of the songs were found on Spotify.';return}
+    st.textContent='Creating the playlist…';
+    const name=(P.name||'Spin profile').replace(/["“”]/g,'').trim()||'Spin profile';
+    const body=JSON.stringify({name,public:false,description:'Made with Spin Builder'});
+    let pl;try{pl=await spFetch('/me/playlists',{method:'POST',body})}catch(e){if(e.status===404||e.status===405){const me=await spFetch('/me');pl=await spFetch('/users/'+encodeURIComponent(me.id)+'/playlists',{method:'POST',body})}else throw e}
+    const add=JSON.stringify({uris:ok.map(x=>x.m.uri)});
+    try{await spFetch('/playlists/'+pl.id+'/items',{method:'POST',body:add})}catch(e){if(e.status===404||e.status===405)await spFetch('/playlists/'+pl.id+'/tracks',{method:'POST',body:add});else throw e}
+    st.textContent='Spotify playlist created with '+ok.length+' of '+L.length+' songs. ';
+    const url=(pl.external_urls&&pl.external_urls.spotify)||('https://open.spotify.com/playlist/'+pl.id);
+    st.append(h('a',{href:url,target:'_blank',rel:'noopener noreferrer',text:'Open it in Spotify'}),document.createTextNode('. Check the matches below.'));
+    const box=h('div',{id:'splist',class:'note',style:'margin-top:8px;display:grid;gap:3px'});
+    rows.forEach((x,i)=>box.append(h('div',{text:(i+1)+'. '+x.r.t+' → '+(x.m?x.m.name+' – '+(x.m.artists||[]).map(a=>a.name).join(', ')+(x.m.album?' ('+x.m.album.name+')':''):'NOT FOUND, add it in Spotify yourself')})));
+    st.after(box)}
+  catch(e){const c=e&&e.status;
+    st.textContent=c===401?'Spotify needs you to sign in again. Tap Send to Spotify.':c===403?'Spotify refused. In the Spotify developer dashboard, make sure your own account is allowed for this app (User Management), and that the app owner has Spotify Premium.':c===429?'Spotify asked us to slow down. Wait a minute and try again.':'The playlist may be partly made. Check Spotify before trying again.'}
+  finally{spBusy=false;b.disabled=false}}
+$('sp').hidden=false;$('sp').addEventListener('click',spSend);
 </script>
 
 </html>
